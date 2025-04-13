@@ -1,0 +1,21 @@
+# 后端
+backend/target/
+backend/.idea/
+backend/*.iml
+backend/*.log
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+frontend/.cache/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.DS_Store
+
+# 通用
+.DS_Store
+.idea/
+*.iml
+*.log
+*.sw? 
