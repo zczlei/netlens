@@ -19,6 +19,12 @@ public interface TrafficScoreRepository extends JpaRepository<TrafficScoreRecord
     // 查询某个分数范围内的记录
     List<TrafficScoreRecord> findByTotalScoreBetween(int minScore, int maxScore);
     
+    // 根据结论查询记录
+    List<TrafficScoreRecord> findByConclusion(String conclusion);
+    
+    // 查询最近的记录，按创建时间降序排列
+    List<TrafficScoreRecord> findTop100ByOrderByCreatedAtDesc();
+    
     // 统计不同结论的数量
     @Query("SELECT t.conclusion, COUNT(t) FROM TrafficScoreRecord t GROUP BY t.conclusion")
     List<Object[]> countByConclusion();

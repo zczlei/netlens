@@ -203,7 +203,9 @@
             API_URL: 'http://localhost:8080/api/traffic',
             
             // 数据收集配置
-            COLLECTION_INTERVAL: 30000, // 30秒
+            BASE_COLLECTION_INTERVAL: 30000, // 基础间隔30秒
+            IDLE_COLLECTION_INTERVAL: 120000, // 空闲状态下收集间隔120秒
+            ACTIVE_THRESHOLD: 5000, // 最近5秒内有交互则视为活跃
             MAX_EVENTS_PER_BATCH: 100,
             
             // 调试配置
@@ -212,6 +214,12 @@
             // 性能配置
             THROTTLE_MOUSE_EVENTS: 100, // 节流时间（毫秒）
             DEBOUNCE_SCROLL_EVENTS: 250, // 防抖时间（毫秒）
+            
+            // 数据压缩
+            DATA_COMPRESSION: true,
+            
+            // 节能模式
+            BATTERY_SAVING_MODE: false
         };
 
         // 数据收集器类
@@ -236,7 +244,14 @@
                     }
                 };
                 
+                // 记录用户活动时间
+                this.lastUserActivity = Date.now();
+                this.collectionTimer = null;
+                
                 this.initializeCollectors();
+                
+                // 启动自适应数据收集
+                this.scheduleNextCollection();
             }
 
             generateFingerprint() {
@@ -275,6 +290,7 @@
                 document.querySelectorAll('[data-ad-action="click"]').forEach(button => {
                     button.addEventListener('click', (e) => {
                         e.preventDefault();
+                        this.recordUserActivity();
                         const adUnit = e.target.closest('[data-ad-id]');
                         if (adUnit) {
                             this.recordConversion('click', adUnit.dataset.adId);
@@ -286,9 +302,11 @@
                 adUnits.forEach(ad => {
                     let hoverStartTime;
                     ad.addEventListener('mouseenter', () => {
+                        this.recordUserActivity();
                         hoverStartTime = new Date().getTime();
                     });
                     ad.addEventListener('mouseleave', () => {
+                        this.recordUserActivity();
                         if (hoverStartTime) {
                             const hoverDuration = new Date().getTime() - hoverStartTime;
                             if (hoverDuration > 1000) {
@@ -297,9 +315,41 @@
                         }
                     });
                 });
-
-                // 定期发送数据
-                setInterval(() => this.sendDataToServer(), CONFIG.COLLECTION_INTERVAL);
+                
+                // 记录用户活动
+                ['mousemove', 'click', 'keydown', 'scroll', 'touchstart'].forEach(eventType => {
+                    document.addEventListener(eventType, () => this.recordUserActivity(), { passive: true });
+                });
+            }
+            
+            // 记录用户活动
+            recordUserActivity() {
+                this.lastUserActivity = Date.now();
+            }
+            
+            // 判断用户是否活跃
+            isUserActive() {
+                return (Date.now() - this.lastUserActivity) < CONFIG.ACTIVE_THRESHOLD;
+            }
+            
+            // 安排下一次数据收集
+            scheduleNextCollection() {
+                if (this.collectionTimer) {
+                    clearTimeout(this.collectionTimer);
+                }
+                
+                const interval = this.isUserActive() ? 
+                    CONFIG.BASE_COLLECTION_INTERVAL : 
+                    CONFIG.IDLE_COLLECTION_INTERVAL;
+                    
+                if (CONFIG.DEBUG) {
+                    console.log(`安排下一次数据收集，间隔: ${interval}ms，用户状态: ${this.isUserActive() ? '活跃' : '空闲'}`);
+                }
+                    
+                this.collectionTimer = setTimeout(() => {
+                    this.sendDataToServer();
+                    this.scheduleNextCollection();
+                }, interval);
             }
 
             recordConversion(type, adId, duration = null) {
@@ -326,15 +376,74 @@
                     console.log('记录转化:', conversion);
                 }
             }
+            
+            // 获取压缩后的数据
+            getCompressedData() {
+                // 根据重要性对数据排序
+                const prioritizedData = {
+                    // 高优先级：基本信息和转化数据
+                    essential: {
+                        ip: this.data.ip,
+                        userAgent: this.data.userAgent,
+                        deviceFingerprint: this.data.deviceFingerprint,
+                        startTime: this.data.startTime,
+                        source: this.data.source,
+                        sessionData: {
+                            duration: (new Date().getTime() - this.data.startTime) / 1000,
+                            interactions: this.data.sessionData.interactions
+                        },
+                        clicks: this.data.clicks
+                    },
+                    
+                    // 低优先级：辅助数据
+                    nonEssential: {
+                        mouseMovements: this.getReducedMouseMovements(),
+                        scrollEvents: this.data.scrollEvents.slice(-10) // 最近10次滚动
+                    }
+                };
+                
+                // 省电模式下只发送高优先级数据
+                return CONFIG.BATTERY_SAVING_MODE ? 
+                    prioritizedData.essential : 
+                    {...prioritizedData.essential, ...prioritizedData.nonEssential};
+            }
+            
+            // 鼠标移动数据降采样
+            getReducedMouseMovements() {
+                // 如果数据量小，直接返回
+                if (this.data.mouseMovements.length < 10) {
+                    return this.data.mouseMovements.slice();
+                }
+                
+                // 否则进行降采样，只取约10%的数据点
+                const samplingRate = Math.max(1, Math.floor(this.data.mouseMovements.length / 10));
+                const sampledData = [];
+                
+                for (let i = 0; i < this.data.mouseMovements.length; i += samplingRate) {
+                    sampledData.push(this.data.mouseMovements[i]);
+                }
+                
+                return sampledData;
+            }
 
             async sendDataToServer() {
                 try {
+                    // 使用压缩数据
+                    const dataToSend = CONFIG.DATA_COMPRESSION ? 
+                        this.getCompressedData() : this.data;
+                    
+                    if (CONFIG.DEBUG) {
+                        console.log('准备发送数据到服务器:', 
+                            `原始数据大小: ${JSON.stringify(this.data).length}字节, ` +
+                            `发送数据大小: ${JSON.stringify(dataToSend).length}字节`);
+                    }
+                    
                     const response = await fetch(CONFIG.API_URL, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify(this.data)
+                        body: JSON.stringify(dataToSend)
                     });
 
                     if (!response.ok) {

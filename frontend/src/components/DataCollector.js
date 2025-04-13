@@ -25,9 +25,16 @@ class DataCollector {
             }
         };
         
+        // 记录用户活动时间
+        this.lastUserActivity = Date.now();
+        this.collectionTimer = null;
+        
         // 初始化本地存储
         this.initializeStorage();
         this.initializeCollectors();
+        
+        // 启动自适应数据收集
+        this.scheduleNextCollection();
     }
 
     initializeStorage() {
@@ -73,12 +80,47 @@ class DataCollector {
             this.initializeScrollTracking();
         }
 
+        // 记录用户活动
+        ['mousemove', 'click', 'keydown', 'scroll', 'touchstart'].forEach(eventType => {
+            document.addEventListener(eventType, () => this.recordUserActivity(), { passive: true });
+        });
+
         // 更新会话时长
         setInterval(() => {
             this.data.sessionData.duration = 
                 (new Date().getTime() - this.data.startTime) / 1000;
             this.saveToStorage();
         }, 1000);
+    }
+    
+    // 记录用户活动时间
+    recordUserActivity() {
+        this.lastUserActivity = Date.now();
+    }
+    
+    // 判断用户是否活跃
+    isUserActive() {
+        return (Date.now() - this.lastUserActivity) < CONFIG.ACTIVE_THRESHOLD;
+    }
+    
+    // 安排下一次数据收集
+    scheduleNextCollection() {
+        if (this.collectionTimer) {
+            clearTimeout(this.collectionTimer);
+        }
+        
+        const interval = this.isUserActive() ? 
+            CONFIG.BASE_COLLECTION_INTERVAL : 
+            CONFIG.IDLE_COLLECTION_INTERVAL;
+            
+        if (CONFIG.DEBUG) {
+            console.log(`安排下一次数据收集，间隔: ${interval}ms，用户状态: ${this.isUserActive() ? '活跃' : '空闲'}`);
+        }
+            
+        this.collectionTimer = setTimeout(() => {
+            this.sendDataToServer();
+            this.scheduleNextCollection();
+        }, interval);
     }
 
     initializeClickTracking() {
@@ -229,6 +271,58 @@ class DataCollector {
         };
     }
 
+    // 获取压缩后的数据
+    getCompressedData() {
+        // 根据重要性对数据排序
+        const prioritizedData = {
+            // 高优先级：基本信息和直接转化相关
+            essential: {
+                ip: this.data.ip,
+                userAgent: this.data.userAgent,
+                deviceFingerprint: this.data.deviceFingerprint,
+                startTime: this.data.startTime,
+                sessionData: {
+                    duration: (new Date().getTime() - this.data.startTime) / 1000,
+                    interactions: this.data.sessionData.interactions,
+                    conversions: this.data.sessionData.conversions
+                },
+                clicks: this.data.clicks.filter(click => 
+                    click.timestamp > Date.now() - 3600000) // 最近1小时的点击
+            },
+            
+            // 低优先级：辅助分析数据
+            nonEssential: {
+                mouseMovements: this.getReducedMouseMovements(),
+                scrollEvents: this.data.scrollEvents.slice(-10), // 最近10次滚动事件
+                conversions: this.data.conversions,
+                adMetrics: this.data.adMetrics
+            }
+        };
+        
+        // 省电模式下只发送高优先级数据
+        return CONFIG.BATTERY_SAVING_MODE ? 
+            prioritizedData.essential : 
+            {...prioritizedData.essential, ...prioritizedData.nonEssential};
+    }
+    
+    // 鼠标移动数据降采样
+    getReducedMouseMovements() {
+        // 如果数据量小，直接返回
+        if (this.data.mouseMovements.length < 10) {
+            return this.data.mouseMovements.slice();
+        }
+        
+        // 否则进行降采样，只取约10%的数据点
+        const samplingRate = Math.max(1, Math.floor(this.data.mouseMovements.length / 10));
+        const sampledData = [];
+        
+        for (let i = 0; i < this.data.mouseMovements.length; i += samplingRate) {
+            sampledData.push(this.data.mouseMovements[i]);
+        }
+        
+        return sampledData;
+    }
+
     cleanupOldData() {
         const now = new Date().getTime();
         const maxAge = 24 * 60 * 60 * 1000; // 24小时
@@ -245,7 +339,16 @@ class DataCollector {
 
     async sendDataToServer() {
         await this.getIPInfo();
-        const data = this.getCollectedData();
+        
+        // 使用压缩数据
+        const dataToSend = CONFIG.DATA_COMPRESSION ? 
+            this.getCompressedData() : this.getCollectedData();
+        
+        if (CONFIG.DEBUG) {
+            console.log('准备发送数据到服务器:', 
+                `原始数据大小: ${JSON.stringify(this.data).length}字节, ` +
+                `发送数据大小: ${JSON.stringify(dataToSend).length}字节`);
+        }
         
         try {
             const response = await fetch(CONFIG.API_URL, {
@@ -253,21 +356,28 @@ class DataCollector {
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(data)
+                body: JSON.stringify(dataToSend)
             });
-
+            
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
-
-            // 发送成功后清理数据
-            this.cleanupOldData();
-            return await response.json();
+            
+            // 清理已发送的数据
+            this.data.clicks = [];
+            this.data.mouseMovements = [];
+            this.data.scrollEvents = [];
+            
+            if (CONFIG.DEBUG) {
+                console.log('数据发送成功');
+            }
         } catch (error) {
             if (CONFIG.DEBUG) {
                 console.error('发送数据失败:', error);
             }
-            throw error;
+            
+            // 保存到本地存储以便稍后重试
+            this.saveToStorage();
         }
     }
 }
