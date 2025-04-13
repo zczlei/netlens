@@ -200,7 +200,7 @@
         // 配置对象
         const CONFIG = {
             // API 配置
-            API_URL: 'http://localhost:8080/api/traffic', // Spring Boot默认端口
+            API_URL: 'http://localhost:8080/api/traffic',
             
             // 数据收集配置
             COLLECTION_INTERVAL: 30000, // 30秒
@@ -226,13 +226,34 @@
                     scrollEvents: [],
                     sessionData: {
                         duration: 0,
-                        interactions: 0,
-                        conversions: 0
+                        interactions: 0
                     },
-                    conversions: []
+                    deviceFingerprint: this.generateFingerprint(),
+                    source: {
+                        page: document.title,
+                        url: window.location.href,
+                        referrer: document.referrer
+                    }
                 };
                 
                 this.initializeCollectors();
+            }
+
+            generateFingerprint() {
+                // 简单的设备指纹生成方法
+                const screenInfo = `${screen.width}x${screen.height}x${screen.colorDepth}`;
+                const timeZone = new Date().getTimezoneOffset();
+                const plugins = Array.from(navigator.plugins || []).map(p => p.name).join(';');
+                const rawFingerprint = `${navigator.userAgent}|${screenInfo}|${timeZone}|${plugins}|${navigator.language}`;
+                
+                // 简单的哈希函数
+                let hash = 0;
+                for (let i = 0; i < rawFingerprint.length; i++) {
+                    const char = rawFingerprint.charCodeAt(i);
+                    hash = ((hash << 5) - hash) + char;
+                    hash = hash & hash; // 转换为32位整数
+                }
+                return hash.toString(16); // 转换为十六进制
             }
 
             initializeCollectors() {
@@ -292,8 +313,14 @@
                     conversion.duration = duration;
                 }
 
-                this.data.conversions.push(conversion);
-                this.data.sessionData.interactions++;
+                if (type === 'click') {
+                    this.data.clicks.push(conversion);
+                } else if (type === 'hover') {
+                    this.data.mouseMovements.push(conversion);
+                } else if (type === 'impression') {
+                    // 记录展示次数
+                    this.data.sessionData.interactions++;
+                }
                 
                 if (CONFIG.DEBUG) {
                     console.log('记录转化:', conversion);
@@ -324,7 +351,6 @@
                     this.data.clicks = [];
                     this.data.mouseMovements = [];
                     this.data.scrollEvents = [];
-                    this.data.conversions = [];
                     
                 } catch (error) {
                     if (CONFIG.DEBUG) {

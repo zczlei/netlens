@@ -14,4 +14,5 @@ public class TrafficData {
     private List<Map<String, Object>> scrollEvents;
     private Map<String, Object> sessionData;
     private String deviceFingerprint;
+    private Map<String, String> source;
 } 
