@@ -3,7 +3,7 @@
     <el-card class="score-card">
       <template #header>
         <div class="card-header">
-          <h2>广告流量评分结果</h2>
+          <h2>广告流量评分结果 <span v-if="score > 0" :style="{color: scoreColor}">({{score}}分)</span></h2>
           <el-button type="primary" size="small" @click="fetchLatestScore" :loading="loading">
             刷新数据
           </el-button>
@@ -23,6 +23,23 @@
       </div>
       
       <div v-else>
+        <div class="total-score-display" v-if="score > 0">
+          <div class="score-header">
+            <span class="score-title">总评分</span>
+            <el-tag :type="conclusionType" effect="dark">{{scoreLabel}}</el-tag>
+          </div>
+          <div class="dashboard-container">
+            <el-progress type="dashboard" :percentage="score" :color="scoreColor" :stroke-width="16">
+              <template #default>
+                <div class="progress-content">
+                  <span class="progress-value" :style="{color: scoreColor}">{{score}}</span>
+                </div>
+              </template>
+            </el-progress>
+          </div>
+          <p class="score-description">{{conclusionDescription}}</p>
+        </div>
+        
         <div class="traffic-source-info">
           <h3>流量来源信息</h3>
           <el-descriptions :column="1" border>
@@ -339,6 +356,8 @@
 </template>
 
 <script>
+import { CONFIG } from '../collector/config';
+
 export default {
   name: 'ScoreDisplay',
   data() {
@@ -382,23 +401,33 @@ export default {
         language: '',
         platform: '',
         canvasHash: ''
-      }
+      },
+      lastFetchTimestamp: 0,
+      dataCacheKey: 'scoreDataCache',
+      userInteracted: false
     }
   },
   created() {
+    // 先尝试从缓存恢复数据
+    this.loadCachedData();
+    
     // 组件创建时获取最新的评分数据
     this.fetchLatestScore();
     
-    // 每30秒自动刷新数据
-    this.timer = setInterval(() => {
-      this.fetchLatestScore();
-    }, 30000);
+    // 使用自适应时间间隔
+    this.startAdaptiveRefresh();
+    
+    // 添加用户交互监听
+    this.addInteractionListeners();
   },
   beforeUnmount() {
     // 组件销毁前清除定时器
     if (this.timer) {
       clearInterval(this.timer);
     }
+    
+    // 移除事件监听
+    this.removeInteractionListeners();
   },
   computed: {
     scoreColor() {
@@ -436,10 +465,97 @@ export default {
   },
   methods: {
     updateScore(scoreData) {
-      this.score = scoreData.totalScore
-      this.details = scoreData.details
+      this.score = scoreData.totalScore;
+      this.details = scoreData.details;
+      
+      // 更新缓存
+      this.cacheCurrentData();
     },
+    
+    // 缓存当前数据
+    cacheCurrentData() {
+      try {
+        const cacheData = {
+          timestamp: Date.now(),
+          score: this.score,
+          details: this.details,
+          rawData: this.rawData
+        };
+        localStorage.setItem(this.dataCacheKey, JSON.stringify(cacheData));
+      } catch (e) {
+        console.error('缓存数据失败:', e);
+      }
+    },
+    
+    // 从缓存加载数据
+    loadCachedData() {
+      try {
+        const cachedData = localStorage.getItem(this.dataCacheKey);
+        if (cachedData) {
+          const data = JSON.parse(cachedData);
+          this.lastFetchTimestamp = data.timestamp;
+          
+          // 检查缓存是否仍然有效（10分钟内）
+          if (Date.now() - data.timestamp < 10 * 60 * 1000) {
+            this.score = data.score;
+            this.details = data.details;
+            this.rawData = data.rawData;
+            this.parseDeviceFingerprint();
+            console.log('从缓存加载评分数据');
+          }
+        }
+      } catch (e) {
+        console.error('加载缓存数据失败:', e);
+      }
+    },
+    
+    // 添加用户交互监听
+    addInteractionListeners() {
+      ['click', 'scroll', 'mousemove', 'keydown'].forEach(event => {
+        window.addEventListener(event, this.handleUserInteraction, { passive: true });
+      });
+    },
+    
+    // 移除用户交互监听
+    removeInteractionListeners() {
+      ['click', 'scroll', 'mousemove', 'keydown'].forEach(event => {
+        window.removeEventListener(event, this.handleUserInteraction);
+      });
+    },
+    
+    // 处理用户交互
+    handleUserInteraction() {
+      this.userInteracted = true;
+    },
+    
+    // 启动自适应刷新
+    startAdaptiveRefresh() {
+      // 清除可能存在的旧定时器
+      if (this.timer) {
+        clearInterval(this.timer);
+      }
+      
+      this.timer = setInterval(() => {
+        const now = Date.now();
+        const timeSinceLastFetch = now - this.lastFetchTimestamp;
+        
+        // 如果用户最近有交互且超过30秒未刷新，或者超过2分钟未刷新，则刷新数据
+        if ((this.userInteracted && timeSinceLastFetch > 30000) || 
+             timeSinceLastFetch > 120000) {
+          this.fetchLatestScore();
+          this.userInteracted = false;
+        }
+      }, 10000); // 每10秒检查一次是否需要刷新
+    },
+    
     async fetchLatestScore() {
+      // 防止频繁刷新，如果距离上次刷新不到CONFIG.CACHE_LIFETIME（默认10秒），则跳过
+      const now = Date.now();
+      if (now - this.lastFetchTimestamp < CONFIG.CACHE_LIFETIME) {
+        console.log('刷新间隔过短，使用缓存数据');
+        return;
+      }
+      
       this.loading = true;
       this.error = null;
       
@@ -496,6 +612,7 @@ export default {
         
         const result = await response.json();
         this.updateScore(result);
+        this.lastFetchTimestamp = now;
         console.log('获取到最新评分数据', result);
       } catch (e) {
         console.error('获取评分数据失败:', e);
@@ -644,5 +761,51 @@ export default {
 .scoring-process p {
   margin: 5px 0;
   line-height: 1.5;
+}
+
+.total-score-display {
+  margin-bottom: 20px;
+}
+
+.progress-content {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+.progress-value {
+  font-size: 28px;
+  font-weight: bold;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.progress-label {
+  font-size: 14px;
+}
+
+.score-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.score-title {
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.score-description {
+  margin-top: 10px;
+  text-align: center;
+}
+
+.dashboard-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 15px 0;
 }
 </style> 
