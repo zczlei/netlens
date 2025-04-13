@@ -258,6 +258,40 @@
                     </div>
                   </div>
                 </el-descriptions-item>
+                
+                <!-- 设备指纹详细信息展示框 -->
+                <el-descriptions-item label="设备指纹详细信息">
+                  <el-button type="primary" size="small" @click="showFingerprintDetails = true">
+                    查看详细信息
+                  </el-button>
+                  
+                  <el-dialog
+                    title="设备指纹详细信息"
+                    v-model="showFingerprintDetails"
+                    width="50%">
+                    <el-descriptions :column="1" border>
+                      <el-descriptions-item label="屏幕信息">
+                        {{ deviceInfo.screen }}
+                      </el-descriptions-item>
+                      <el-descriptions-item label="时区偏移">
+                        {{ deviceInfo.timezone }}
+                      </el-descriptions-item>
+                      <el-descriptions-item label="浏览器插件">
+                        {{ deviceInfo.plugins || '无可用插件信息' }}
+                      </el-descriptions-item>
+                      <el-descriptions-item label="语言设置">
+                        {{ deviceInfo.language }}
+                      </el-descriptions-item>
+                      <el-descriptions-item label="平台">
+                        {{ deviceInfo.platform }}
+                      </el-descriptions-item>
+                      <el-descriptions-item label="Canvas哈希">
+                        {{ deviceInfo.canvasHash.substring(0, 20) + '...' }}
+                      </el-descriptions-item>
+                    </el-descriptions>
+                  </el-dialog>
+                </el-descriptions-item>
+                
                 <el-descriptions-item label="浏览器行为">
                   得分：{{ details.browserBehaviorScore }}/5
                   <div class="score-detail">
@@ -339,7 +373,16 @@ export default {
       },
       loading: false,
       error: null,
-      timer: null
+      timer: null,
+      showFingerprintDetails: false,
+      deviceInfo: {
+        screen: '',
+        timezone: '',
+        plugins: '',
+        language: '',
+        platform: '',
+        canvasHash: ''
+      }
     }
   },
   created() {
@@ -435,6 +478,9 @@ export default {
         // 保存原始数据
         this.rawData = JSON.parse(JSON.stringify(trafficData));
         
+        // 解析设备指纹信息
+        this.parseDeviceFingerprint();
+        
         // 发送请求到后端API进行分析
         const response = await fetch('/api/traffic-analysis', {
           method: 'POST',
@@ -451,11 +497,43 @@ export default {
         const result = await response.json();
         this.updateScore(result);
         console.log('获取到最新评分数据', result);
-      } catch (error) {
-        this.error = `获取数据失败: ${error.message}`;
-        console.error('获取评分数据失败:', error);
+      } catch (e) {
+        console.error('获取评分数据失败:', e);
+        this.error = `获取评分数据失败: ${e.message}`;
       } finally {
         this.loading = false;
+      }
+    },
+    
+    parseDeviceFingerprint() {
+      try {
+        // 如果设备指纹存在且为十六进制格式，则尝试从用户代理获取信息
+        this.deviceInfo = {
+          screen: `${screen.width}x${screen.height}x${screen.colorDepth}`,
+          timezone: new Date().getTimezoneOffset(),
+          plugins: Array.from(navigator.plugins || []).map(p => p.name).join('; ').substring(0, 100),
+          language: navigator.language,
+          platform: navigator.platform,
+          canvasHash: this.generateSimpleCanvasHash()
+        };
+      } catch (error) {
+        console.error('解析设备指纹信息失败:', error);
+      }
+    },
+    
+    generateSimpleCanvasHash() {
+      try {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        ctx.textBaseline = "top";
+        ctx.font = "14px 'Arial'";
+        ctx.fillStyle = "#f60";
+        ctx.fillRect(10, 10, 30, 20);
+        ctx.fillStyle = "#069";
+        ctx.fillText("指纹测试", 2, 15);
+        return canvas.toDataURL().substring(0, 100);
+      } catch (e) {
+        return '无法生成Canvas指纹';
       }
     }
   }
