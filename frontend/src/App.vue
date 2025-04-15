@@ -1,14 +1,14 @@
 <template>
   <div id="app">
     <header>
-      <h1>博色广告流量分析系统</h1>
+      <h1>广告流量分析系统</h1>
       <div class="subtitle">实时监控、智能评分、多维分析</div>
     </header>
     <main>
       <router-view></router-view>
     </main>
     <footer>
-      <p>© 2025 博色广告流量分析系统 - 版本1.0.1</p>
+      <p>© 2025 广告流量分析系统 - 版本1.0.1</p>
     </footer>
   </div>
 </template>
@@ -79,5 +79,11 @@ footer {
 
 .card-header h2, .card-header h3 {
   margin: 0;
+}
+
+.logo-img {
+  width: 32px;
+  height: 32px;
+  margin-right: 10px;
 }
 </style> 
