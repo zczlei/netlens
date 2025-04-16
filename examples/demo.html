@@ -200,7 +200,8 @@
         // 配置对象
         const CONFIG = {
             // API 配置
-            API_URL: 'http://localhost:8080/api/traffic',
+            API_URL: 'http://192.168.1.187:8080/api/traffic-analysis',
+            TRAFFIC_URL: 'http://192.168.1.187:8080/api/traffic',
             
             // 数据收集配置
             BASE_COLLECTION_INTERVAL: 30000, // 基础间隔30秒
@@ -219,7 +220,10 @@
             DATA_COMPRESSION: true,
             
             // 节能模式
-            BATTERY_SAVING_MODE: false
+            BATTERY_SAVING_MODE: false,
+            
+            // 测试IP
+            TEST_IP: null // 不使用固定IP，而是实时获取公网IP
         };
 
         // 数据收集器类
@@ -247,6 +251,9 @@
                 // 记录用户活动时间
                 this.lastUserActivity = Date.now();
                 this.collectionTimer = null;
+                
+                // 初始化时获取公网IP
+                this.getPublicIP();
                 
                 this.initializeCollectors();
                 
@@ -432,16 +439,47 @@
                     const dataToSend = CONFIG.DATA_COMPRESSION ? 
                         this.getCompressedData() : this.data;
                     
+                    // 确保IP字段不为空，获取公网IP
+                    if (!dataToSend.ip) {
+                        const publicIP = await this.getPublicIP();
+                        if (publicIP) {
+                            dataToSend.ip = publicIP;
+                            this.data.ip = publicIP;
+                        }
+                    }
+                    
+                    // 如果IP仍然为空，尝试再次从API获取
+                    if (!dataToSend.ip) {
+                        try {
+                            const ipResponse = await fetch('https://api.ipify.org?format=json');
+                            if (ipResponse.ok) {
+                                const ipData = await ipResponse.json();
+                                dataToSend.ip = ipData.ip;
+                                this.data.ip = dataToSend.ip;
+                            }
+                        } catch (e) {
+                            console.error('获取IP出错:', e);
+                        }
+                    }
+                    
+                    if (!dataToSend.ip) {
+                        console.error('无法获取公网IP，请求可能会使用本地IP');
+                    }
+                    
                     if (CONFIG.DEBUG) {
                         console.log('准备发送数据到服务器:', 
                             `原始数据大小: ${JSON.stringify(this.data).length}字节, ` +
-                            `发送数据大小: ${JSON.stringify(dataToSend).length}字节`);
+                            `发送数据大小: ${JSON.stringify(dataToSend).length}字节`, 
+                            `使用IP: ${dataToSend.ip}`);
                     }
                     
+                    // 发送到API_URL (traffic-analysis)
                     const response = await fetch(CONFIG.API_URL, {
                         method: 'POST',
                         headers: {
-                            'Content-Type': 'application/json'
+                            'Content-Type': 'application/json',
+                            'X-Forwarded-For': dataToSend.ip,
+                            'X-Real-IP': dataToSend.ip
                         },
                         body: JSON.stringify(dataToSend)
                     });
@@ -453,7 +491,30 @@
                     const result = await response.json();
                     
                     if (CONFIG.DEBUG) {
-                        console.log('数据发送成功:', result);
+                        console.log('数据发送成功到分析API:', result);
+                    }
+                    
+                    // 同时发送到TRAFFIC_URL (traffic)
+                    try {
+                        const trafficResponse = await fetch(CONFIG.TRAFFIC_URL, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-Forwarded-For': dataToSend.ip,
+                                'X-Real-IP': dataToSend.ip
+                            },
+                            body: JSON.stringify(dataToSend)
+                        });
+                        
+                        if (trafficResponse.ok) {
+                            if (CONFIG.DEBUG) {
+                                console.log('数据同时发送到流量收集API成功');
+                            }
+                        }
+                    } catch (trafficError) {
+                        if (CONFIG.DEBUG) {
+                            console.error('发送到流量收集API失败:', trafficError);
+                        }
                     }
 
                     // 清理已发送的数据
@@ -466,6 +527,31 @@
                         console.error('发送数据失败:', error);
                     }
                 }
+            }
+
+            // 获取公网IP的专用方法
+            async getPublicIP() {
+                if (this.data.ip) {
+                    return this.data.ip;
+                }
+                
+                try {
+                    const ipResponse = await fetch('https://api.ipify.org?format=json');
+                    if (ipResponse.ok) {
+                        const ipData = await ipResponse.json();
+                        this.data.ip = ipData.ip;
+                        if (CONFIG.DEBUG) {
+                            console.log('成功获取公网IP:', this.data.ip);
+                        }
+                        return this.data.ip;
+                    }
+                } catch (error) {
+                    if (CONFIG.DEBUG) {
+                        console.error('获取公网IP失败:', error);
+                    }
+                }
+                
+                return null;
             }
         }
 
