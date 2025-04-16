@@ -8,6 +8,7 @@ public class ScoreResult {
     private int totalScore;
     private Map<String, Object> details;
     private String conclusion;
+    private String ipGeoInfo;
     
     public void setTotalScore(int score) {
         this.totalScore = score;
